@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 # 메인 타이틀을 중앙에 달기
 
 _, col, _ = st.columns([2,6,2])
-col.header('Stream 시각화')
+col.header('Stream 시각화!!')
 
 # 시각화 대상의 데이터
 dfIris = sns.load_dataset('iris')
