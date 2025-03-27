@@ -1,42 +1,135 @@
+# 필요한 라이브러리를 불러온다.
 import streamlit as st
-
-import pandas as pd
-
-import seaborn as sns
-
+import FinanceDataReader as fdr
+import mplfinance as mpf
+import json
 import matplotlib.pyplot as plt
+from streamlit_lottie import st_lottie
+from datetime import datetime, timedelta
 
 
-# 메인 타이틀을 중앙에 달기
+# 트레이딩 시그널을 제공하는 볼린저 밴드를 그려주는 함수.
+def addBollingerBand(data, ax):
+    # 추가적인 그래프 출력에 유리한 형태로 데이터프레임 변환.
+    df = data.reset_index(drop=True)
+    df['MA20'] = df['Close'].rolling(window=20).mean()  # 20일 이동평균.
+    df['StDev'] = df['Close'].rolling(window=20).std()  # 20일 이동표준편차.
+    df['Upper'] = df['MA20'] + (df['StDev'] * 2)        # 밴드의 상한.
+    df['Lower'] = df['MA20'] - (df['StDev'] * 2)        # 밴드의 하한.
+    df = df[19:]                                        # 시작일 20 이후만 가능. 
+    ax.plot(df.index, df['Upper'], color = 'red', linestyle ='--', linewidth=1.5, label = 'Upper')       
+    ax.plot(df.index, df['MA20'], color='aqua', linestyle = ':', linewidth = 2, label = 'MA20')
+    ax.plot(df.index, df['Lower'], color='blue', linestyle= '--', linewidth=1.5, label = 'Lower')
+    ax.fill_between(df.index, df['Upper'], df['Lower'], color='grey', alpha=0.3) 
+    ax.legend(loc='best')
 
-_, col, _ = st.columns([2,6,2])
-col.header('Stream 시각화!!')
 
-# 시각화 대상의 데이터
-dfIris = sns.load_dataset('iris')
-dfIris
+# JSON을 읽어 들이는 함수.
+def loadJSON(path):
+    f = open(path, 'r')
+    res = json.load(f)
+    f.close()
+    return res
 
-colors = {"setosa":"red", "versicolor":"blue","virginica":"green"} 
-
-with st.sidebar:
-    selectX = st.selectbox("X 변수 선택 :", ["sepal_length", "sepal_width", "petal_length", "petal_width"])
+# 로고 Lottie와 타이틀 출력.
+col1, col2 = st.columns([1,2])
+with col1:
+    lottie = loadJSON('lottie-stock-candle-loading.json')
+    st_lottie(lottie, speed=1, loop=True, width=150, height=150)
+with col2:
     ''
-    selectY = st.selectbox("Y 변수 선택 :", ["sepal_length", "sepal_width", "petal_length", "petal_width"])
     ''
-    selectSpecies = st.multiselect("붓꽃 유형 선택 (다중) : ",["setosa","versicolor","virginica"])
-    ''
-    selectAlpha = st.slider("alpha 설정:", 0.1, 1.0, 0.5)
+    st.title('정보 시각화')
 
-# 선택된 붓꽃 유형별 산점도로 시각화 표현
-if selectSpecies:
-    fig = plt.figure(figsize=(7,5))
-    for aSpecies in selectSpecies:
-        df = dfIris[dfIris.species == aSpecies]
-        plt.scatter(df[selectX], df[selectY],color=colors[aSpecies],alpha= selectAlpha,label=aSpecies)
-    
-    plt.xlabel(selectX)
-    plt.ylabel(selectY)
-    plt.title("Iris Scatter Plot")
+# 시장 데이터를 읽어오는 함수 정의
+@st.cache_data
+def getData(code, startdate, enddate):
+    df = fdr.DataReader(code, startdate, enddate).drop(columns='Change')
+    return df
+
+@st.cache_data
+def getSymbols(market='KOSPI', sort='Marcap'):
+    df = fdr.StockListing(market)
+    ascending = False if sort == 'Marcap' else True
+    df.sort_values(by=[sort], ascending= ascending, inplace=True)
+    return df[ ['Code', 'Name', 'Market'] ]
+
+# 세션 상태를 초기화 한다.
+if 'ndays' not in st.session_state:
+    st.session_state['ndays'] = 100                 #
+
+if 'code_index' not in st.session_state:
+    st.session_state['code_index'] = 0
+
+if 'chart_style' not in st.session_state:
+    st.session_state['chart_style'] = 'default'
+
+if 'volume' not in st.session_state:
+    st.session_state['volume'] = True
+
+
+with st.sidebar.form(key='chartsetting', clear_on_submit=True):
+    st.header('차트 설정')
+    ''
+    ''
+    symbols = getSymbols()
+    choices = zip(symbols.Code, symbols.Name, symbols.Market)
+    choices = [' : '.join(x) for x in choices]
+    choice = st.selectbox(label='종목:', options=choices, index=st.session_state['code_index'])
+    code_index = choices.index(choice)
+    code = choice.split()[0]
+    ''
+    ''
+    ndays = st.slider(
+            label='기간 (days)',
+            min_value= 50,
+            max_value= 365,
+            value= st.session_state['ndays'],
+            step=1)
+    ''
+    ''
+    chart_styles = ['default', 'binance', 'blueskies', 'brasil', 'charles', 'checkers', 'classic', 'yahoo','mike', 'nightclouds', 'sas', 'starsandstripes']
+    chart_style = st.selectbox(label='차트 스타일:',options=chart_styles,index = chart_styles.index(st.session_state['chart_style']))
+    ''
+    ''
+    volume = st.checkbox('거래량', value=st.session_state['volume'])
+    ''
+    ''
+
+
+    if st.form_submit_button(label="OK"):
+        st.session_state['ndays'] = ndays
+        st.session_state['code_index'] = code_index
+        st.session_state['chart_style'] = chart_style
+        st.session_state['volume'] = volume
+        st.rerun()
+
+
+# 캔들 차트 + 지표를 출력해 주는 함수.
+def plotChartV2(data):
+    chart_style = st.session_state['chart_style']
+    marketcolors = mpf.make_marketcolors(up='red', down='blue')
+    mpf_style = mpf.make_mpf_style(base_mpf_style= chart_style, marketcolors=marketcolors)
+    # 바탕이 되는 캔들차트.
+    # 이동편균선은 더이상 그리지 않음.
+    fig, ax = mpf.plot(
+        data,
+        volume=st.session_state['volume'],
+        type='candle',
+        style=mpf_style,
+        figsize=(10,7),
+        fontscale=1.1,
+        returnfig=True                  # Figure 객체 반환.
+    )
+    addBollingerBand(data, ax[0])       # Bollinger Band를 axis에 추가.
     st.pyplot(fig)
-else:
-    st.warning("붓꽃의 유형을 선택하세요")
+
+# 데이터를 불러오고 최종적으로 차트를 출력해 준다.
+# 주의: datetime.today()에는 항상 변하는 "시:분:초"가 들에있어서 cache가 작동하지 않는다.
+#       "시:분:초"를 떼어 버리고 날짜만 남도록 date()를 호출하는 것이 중요하다!
+
+date_start = (datetime.today()-timedelta(days=st.session_state['ndays'])).date()
+df = getData(code, date_start, datetime.today().date())     
+chart_title = choices[st.session_state['code_index'] ]
+st.markdown(f'<h3 style="text-align: center; color: red;">{chart_title}</h3>', unsafe_allow_html=True)
+plotChartV2(df)
